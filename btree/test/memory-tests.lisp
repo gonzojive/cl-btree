@@ -1,6 +1,6 @@
 (in-package :btree-tests)
 
-(declaim (optimize debug))
+(declaim (optimize debug 3))
 
 (in-suite btree-tests)
 
@@ -82,7 +82,7 @@
   (ordered-in-ordered-out (ordered-listn 12))
   (ordered-in-ordered-out (ordered-listn 30))
   (ordered-in-ordered-out (ordered-listn 3000) :max-keys 15)
-  (ordered-in-ordered-out (ordered-listn 3000) :max-keys 15)))
+  (ordered-in-ordered-out (ordered-listn 3000) :max-keys 15))
 
 (defun plist->btree (plist &rest btree-args)
   (let ((b (apply #'make-instance 'btree::memory-btree btree-args)))
@@ -110,3 +110,10 @@
   (sorts-like-sort '(3 4 13 6 2 3 14 6))
   (sorts-like-sort (mapcar #'(lambda (x) (format nil "blah blah ~A blah" x)) '(3 4 13 6 2 3 14 6))
 		   :predicate #'string-lessp))
+
+(deftest example-insert-and-search ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three"))))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal nil (btree-search b 2.5)))))

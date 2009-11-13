@@ -64,9 +64,9 @@ length of the vector."
 	     (value (aref vec center))
 	     (key-value (funcall key value)))
 	(if (= (- end start) 1)
-	    (if (funcall less-than find-value key-value)
-		start
-		(1+ start))
+	    (if (funcall less-than key-value find-value)
+		(1+ start)
+		start)
 	    (let ((key-value<find-value (funcall less-than key-value find-value)))
 	      (cond
 		(key-value<find-value

@@ -17,14 +17,13 @@
 (defclass memory-btree-node ()
   ((keyvals
     :initarg :keyvals
-    :accessor node-keyvals)
-   (values
-    :initarg :values
-    :accessor node-values)
+    :accessor node-keyvals
+    :documentation "Array of key-value conses.  Capacity is MAX-KEYS+1")
    (children
     :initarg :children
-    :accessor node-children))
-
+    :accessor node-children
+    :documentation "Array of child nodes.  Capicity is MAX-KEYS+2.
+Leafs have 0-length child array."))
   (:documentation "btree stored in memory"))
 
 (defmethod print-object ((obj memory-btree-node) s)
@@ -228,18 +227,6 @@ values:
 		      position (apply #'btree-node-position-for-key tree node key rest))))
     (values node position parent-nodes)))
 	 
-(defmethod btree-search (tree key &rest rest &key &allow-other-keys)
-  "Search is performed in the typical manner, analogous to that in a binary search tree. Starting at
-the root, the tree is traversed top to bottom, choosing the child pointer whose separation values are
-on either side of the value that is being searched."
-  (multiple-value-bind (node position)
-      (apply #'btree-position-for-key tree key rest)
-    (multiple-value-bind (k v)
-	(btree-node-entry-at-position tree node position)
-      (when (btree-value-equalp tree k key)
-	(values k v t)
-	(values nil nil nil)))))
-
 (defun map-node-and-children (tree node fn)
   (flet ((keyval-fn (keyval)
 	   (funcall fn (car keyval) (cdr keyval)))

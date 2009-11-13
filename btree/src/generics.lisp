@@ -5,12 +5,19 @@
   (:documentation "Inserts the given key and value into the btree."))
 
 (defgeneric btree-search (tree key &key &allow-other-keys)
-  (:documentation "Returns 3 values: the key and value of of the entry found, and T if one
+  (:documentation "Returns 3 values: the value and the ky of the entry found, and T if one
 was actually found (in case nil nil are the key and value)."))
 
 (defgeneric btree-map (tree map-fn &key start end value from-end &allow-other-keys)
   (:documentation "Returns 3 values: the key and value of of the entry found, and T if one
 was actually found (in case nil nil are the key and value)."))
+
+(defgeneric btree-max-keys (btree)
+  (:documentation "The maximum number of keys allowed in each node."))
+
+(defgeneric btree-min-keys (btree)
+  (:documentation "The minimum number of keys allowed in each node."))
+
 
 ;; private generics
 (defgeneric btree-root (tree)
@@ -86,3 +93,24 @@ element stored in this node.  If leftp is NIL, returns the right child."))
 (defgeneric btree-value-equalp (tree value test-value)
   (:documentation "Returns non-nil iff value equals test-value
 according to the comparison used by the btree."))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;; Generic Implementation
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmethod btree-min-keys (btree)
+  (floor (btree-max-keys btree) 2))
+
+(defmethod btree-search (tree key &rest rest &key &allow-other-keys)
+  "Search is performed in the typical manner, analogous to that in a
+binary search tree. Starting at the root, the tree is traversed top to
+bottom, choosing the child pointer whose separation values are on
+either side of the value that is being searched."
+  (multiple-value-bind (node position)
+      (apply #'btree-position-for-key tree key rest)
+    (when (or node position)
+      (multiple-value-bind (k v)
+	  (btree-node-entry-at-position tree node position)
+	(if (btree-value-equalp tree k key)
+	    (values v k t)
+	    (values nil nil nil))))))
