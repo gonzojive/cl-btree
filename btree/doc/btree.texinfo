@@ -1,0 +1,147 @@
+\input texinfo
+@setfilename internals.texinfo
+@settitle cl-btree
+
+@copying
+Copyright @copyright{} 2009 Red Daly
+@end copying
+
+@titlepage
+@title cl-btree
+
+@c The following two commands start the copyright page.
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@c Output the table of contents at the beginning.
+@contents
+
+@ifnottex
+
+@node Top
+@top Blockfort
+@insertcopying
+@end ifnottex
+     
+@chapter Introduction
+cl-btree is a generic library for working with of B-Trees in pure
+Common Lisp.  The library provides both an implementation of in-memory
+b-trees and a protocol for defining subclasses of btrees for other
+systems.  We distinguish between btree @emph{users} and @emph{protocol
+implementors} in this documentation.
+
+@section Structure of this documentation
+In the first chapter we through a tutorial with many examples of using
+a btree.  This is a quick introduction with useful examples for easy cut-and-pasting.
+
+In the second chapter we define the user API in detail.
+
+In the third chapter we define the BTree protocol for @emph{protocol
+implementors} and discuss the motiviation for this design.
+
+@chapter Tutorial
+The first step is instantiating a btree.  We will work with the
+provided btree implementation, @code{memory-btree}:
+
+@lisp
+(defparameter *my-btree*
+  (make-instance 'btree:memory-btree :max-keys 5))
+
+@end lisp
+
+Above we create a btree that may have at most 5 key/value pairs in
+each node.  When a btree node grows beyond 5 key/value pairs it will
+split into two nodes.  That parameter may be omitted and the btree
+will choose a reasonable default.  In fact, btrees may be dealt with
+purely as an abstraction, without any knowledge of the internal
+structure.
+
+Next, we add a few keys and values to the btree.
+
+@lisp
+(btree:btree-insert *my-btree* 1 "One")
+(btree:btree-insert *my-btree* 2 "Two")
+(btree:btree-insert *my-btree* 3 "Three")
+@end lisp
+
+To retrieve these values is pretty simple:
+
+@lisp
+(btree-search *my-btree* 3)
+ ==> "Three"
+     3
+     T
+@end lisp
+
+But if we search for a value that is not in the tree, we git nil:
+
+@lisp
+(btree-search *my-btree* 2.4)
+ ==> NIL
+     NIL
+     NIL
+@end lisp
+
+
+It is also possible to map the btree's keys and values:
+
+@lisp
+BTREE> (btree:btree-map *my-btree*
+                        #'(lambda (key value)
+                            (format t "~A => ~A~%" key value)))
+1 => One
+2 => Two
+3 => Three
+@end lisp
+
+@chapter API
+See @code{btree-search}, @code{btree-insert}, and @code{btree-map}.
+@chapter Protocol
+cl-btree provides a set of generic functions that define an interface
+for the implementation of btrees.  The user-level interface is based
+on generic functions, so it is possible for an implementor to simply
+specialize all the public functions on a particular btree class.
+
+However, the basic algorithms have already been written to avoid a
+complete BTree rewrite.  There are a series of generic functions that
+must be implemented that we will discuss later in the chapter.  First
+we will introduce the abstractions and assumptions we have made when
+defining our interface:
+
+@section Concepts
+In our interface, there are a few types of objects that get passed around:
+
+@itemize
+@item @emph{BTree}
+-- an object that corresponds to an entire BTree.  Relevant functions
+are @code{btree-max-keys}, @code{btree-position-for-key},
+@code{btree-value-equalp}.
+
+@item @emph{Node}
+-- an object that designates a particular node in a BTree.  Does not
+need to carry information about the parent node or the btree itself,
+since most functions that operate on the node also pass in the tree.
+Example functions are @code{btree-node-split},
+@code{btree-node-position-for-key}, and
+@code{btree-node-child-at-position}.
+
+@item @emph{Node Offset}
+ -- Designates a key-value index into a Node.  Could
+also be used to designate the place to insert a child node (the range
+is 0 - max-keys).  Relevant functions are
+@code{btree-node-position-for-key}.
+
+@item @emph{Cursor}
+-- Designates a node offset for a particular node and information
+relevant for advancing to the next key-value pair, deleting, and
+inserting.  This type of object would probably want to store both a
+node offset and a list of parents.  The interfaction with cursors in
+cl-btree is functional, but additional keywords may allow the provided
+functions to operate destructively.
+
+@end itemize
+
+
+@bye
