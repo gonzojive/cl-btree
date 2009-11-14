@@ -134,14 +134,17 @@ Leafs have 0-length child array."))
 							    (node memory-btree-node)
 							    offset &key &allow-other-keys)
   (assert (> (btree-node-keycount tree node) (btree-min-keys tree)))
-  (btree-node-delete-from-leaf tree node offset))
+  (btree-node-delete-from-node tree node offset))
 
-(defmethod btree-node-delete-from-leaf ((tree memory-btree)
+(defmethod btree-node-delete-from-node ((tree memory-btree)
 					(node memory-btree-node)
-					offset &key &allow-other-keys)
-  (with-accessors ((keyvals node-keyvals))
+					offset &key child-offset &allow-other-keys)
+  (with-accessors ((keyvals node-keyvals)
+		   (children node-children))
       node
-    (setf keyvals (delete-if (constantly t) keyvals :start offset :count 1))))
+    (setf keyvals (delete-if (constantly t) keyvals :start offset :count 1))
+    (when child-offset
+      (setf children (delete-if (constantly t) keyvals :start child-offset :count 1)))))
 
 
 (defmethod btree-node-split ((tree memory-btree)

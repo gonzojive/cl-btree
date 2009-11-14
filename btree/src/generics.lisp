@@ -133,7 +133,7 @@ values:
   (:documentation "Deletes the key/value pair at offset from the leaf node NODE
 when NODE has more than the minimum number of key/value pairs."))
 
-(defgeneric btree-node-delete-from-leaf (tree node offset &key &allow-other-keys)
+(defgeneric btree-node-delete-from-node (tree node offset &key child-offset &allow-other-keys)
   (:documentation "Deletes the key/value pair at offset from the leaf node NODE.
 Allows for underflow (i.e. minimum number of key/value pairs in leaf"))
 
@@ -400,7 +400,7 @@ The returns values for this function are as follows:
 	      right-node)))
     (values action parent-keyval-position destination-keyval-position sibling-info)))
 	 
-(defmethod  btree-delete-from-minimally-filled-leaf (tree position &key &allow-other-keys)
+(defmethod  btree-delete-from-minimally-filled-node (tree position &key &allow-other-keys)
   ;; Find the closest sibling to the node at which we are deleting the value
   ;; If that node has MORE than the minimum number of elements, we shift one of them
   ;; up to the parent node and shift the parent node's
@@ -409,7 +409,7 @@ The returns values for this function are as follows:
   (let ((this-node (position-node position))
 	(this-node-offset (position-node-offset position)))
     ;; 1. Delete the key/value pair from the leaf
-    (btree-node-delete-from-leaf tree this-node this-node-offset)
+    (btree-node-delete-from-node tree this-node this-node-offset)
 
     ;; Case 1: we do not need to merge sibling nodes
     (multiple-value-bind (action
