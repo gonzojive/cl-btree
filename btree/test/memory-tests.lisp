@@ -139,8 +139,6 @@
     (is (null (btree-search b 3)))))
 
 (deftest internal-delete ()
-  t
-  #+nil
   (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three"
 			   0 "Zero" 1/2 "One Half")
 			 :max-keys 2)))
