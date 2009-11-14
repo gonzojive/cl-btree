@@ -1,6 +1,6 @@
 (in-package :btree)
 
-(declaim (optimize debug))
+(declaim (optimize (debug 3)))
 
 (defclass memory-btree ()
   ((root-node
@@ -42,6 +42,10 @@ Leafs have 0-length child array."))
   (setf (btree-root btree) (btree-make-node btree))
   btree)
 
+(defmethod btree-node-keycount ((tree memory-btree) (node memory-btree-node))
+  (or (when-let (keyvals (node-keyvals node)) (length keyvals))
+      0))
+
 (defmethod btree-value-equalp ((tree memory-btree) value test-value)
   (let ((less (btree-test tree)))
     (and (not (funcall less value test-value))
@@ -67,7 +71,7 @@ Leafs have 0-length child array."))
   (setf (aref array position) value)
   array)
 
-(defmethod btree-node-position-for-key ((tree memory-btree)
+(defmethod btree-node-offset-for-key ((tree memory-btree)
 					(node memory-btree-node)
 					key &key maxp &allow-other-keys)
   ;; the binary search version
@@ -83,7 +87,7 @@ Leafs have 0-length child array."))
 				  -1))))
     position-of-key))
 
-(defmethod btree-node-child-at-position  ((tree memory-btree) (node memory-btree-node) position)
+(defmethod btree-node-child-at-offset  ((tree memory-btree) (node memory-btree-node) position)
   (assert (not (btree-node-leafp tree node)))
   (assert (< position (length (node-children node))))
   (assert (btree-nodep tree   (aref (node-children node) position)))
@@ -91,9 +95,10 @@ Leafs have 0-length child array."))
     
 
 
-(defmethod btree-node-entry-at-position ((tree memory-btree)
+(defmethod btree-node-entry-at-offset ((tree memory-btree)
 					 (node memory-btree-node)
 					 position)
+  (assert (< position (btree-node-keycount tree node)))
   (let ((cons (aref (node-keyvals node) position)))
     (values (car cons) (cdr cons))))
 
@@ -104,22 +109,40 @@ Leafs have 0-length child array."))
   
   (let ((root (btree-make-node tree)))
     (setf (btree-root tree) root)
-    (btree-node-insert-at-position tree root 0 key :value value
+    (btree-node-insert-unfilled tree root 0 key value
 				   :right-child right-child  :left-child left-child)
     (debug-format "New root: ~A~%" root)
     root))
 
-(defmethod btree-node-insert-at-position  ((tree memory-btree)
+(defmethod btree-node-insert-unfilled  ((tree memory-btree)
 					   (node memory-btree-node)
-					   position key &key value left-child right-child &allow-other-keys)
+					   offset key value &key left-child right-child &allow-other-keys)
   (assert (or (not (and left-child right-child))
 	      (and (btree-node-rootp tree node) (= 0 (length (node-keyvals node))))))
-  (insert-into-array (node-keyvals node) (cons key value) position)
+  (insert-into-array (node-keyvals node) (cons key value) offset)
   (when left-child
-    (insert-into-array (node-children node) left-child position))
+    (insert-into-array (node-children node) left-child offset))
   (when right-child
-    (insert-into-array (node-children node) right-child (1+ position)))
+    (insert-into-array (node-children node) right-child (1+ offset)))
   tree)
+
+(defmethod btree-node-replace-key-value  ((tree memory-btree) (node memory-btree-node)
+					  offset key value &key &allow-other-keys)
+  (setf (aref (node-keyvals node) offset) (cons key value)))
+
+(defmethod btree-node-delete-from-sufficiently-filled-leaf ((tree memory-btree)
+							    (node memory-btree-node)
+							    offset &key &allow-other-keys)
+  (assert (> (btree-node-keycount tree node) (btree-min-keys tree)))
+  (btree-node-delete-from-leaf tree node offset))
+
+(defmethod btree-node-delete-from-leaf ((tree memory-btree)
+					(node memory-btree-node)
+					offset &key &allow-other-keys)
+  (with-accessors ((keyvals node-keyvals))
+      node
+    (setf keyvals (delete-if (constantly t) keyvals :start offset :count 1))))
+
 
 (defmethod btree-node-split ((tree memory-btree)
 			     (node memory-btree-node)
@@ -131,14 +154,14 @@ values:
 2.  Right node.
 3.  Median key.
 4.  Median value."
-  (let ((key-position (or key-position (btree-node-position-for-key tree node key)))
+  (let ((key-position (or key-position (btree-node-offset-for-key tree node key)))
 	(median-position (floor (/ (btree-max-keys tree) 2))))
 
-    (btree-node-insert-at-position tree node key-position key
-				   :value value :left-child left-child :right-child right-child)
+    (btree-node-insert-unfilled tree node key-position key value
+				   :left-child left-child :right-child right-child)
 
     (multiple-value-bind (median-key median-value)
-	(btree-node-entry-at-position tree node median-position)
+	(btree-node-entry-at-offset tree node median-position)
 
       (let ((right (let ((r (btree-make-node tree)))
 		     ;(debug-format "Mapping ~A into right keyvals~%" (node-keyvals node))
@@ -175,58 +198,6 @@ values:
 (defun sanity-check-btree (tree)
   (declare (optimize (debug 3))))
 
-
-
-(defmethod btree-node-insert (tree node key &key key-position value left-child right-child parents &allow-other-keys)
-  (if (not (btree-node-fullp tree node))
-      ;; IF the node is not full, simply insert the new key and value at the the right position
-      (let ((position (btree-node-position-for-key tree node key)))
-	(assert position)
-	(btree-node-insert-at-position tree node position key
-					:value value
-					:left-child left-child :right-child right-child))
-      ;; If the node is full, then we split the node and insert the median value in the
-      ;; parent node, with left and right nodes according to the split.
-      (multiple-value-bind (left-split-child right-split-child median-key median-value)
-	  (btree-node-split tree node
-			    :key key :key-position key-position :value value
-			    :left-child left-child :right-child right-child)
-	(sanity-check-btree tree)
-	(if (not (btree-node-rootp tree node))
-	    (btree-node-insert tree (first parents) median-key
-			       :value median-value
-			       ;:left-child left-split-child
-			       :right-child right-split-child
-			       :parents (rest parents))
-	    ;; make new root
-	    (btree-replace-root tree :key median-key :value median-value
-				:left-child left-split-child :right-child right-split-child)))))
-
-(defmethod btree-insert (tree key value &rest rest &key &allow-other-keys)
-  "1. By searching the tree, find the leaf node where the new element should be added.
-2. If the leaf node contains fewer than the maximum legal number of elements, there is room for one more. Insert the new element in the node, keeping the node's elements ordered.
-3. Otherwise the leaf node is split into two nodes.
-      1. A single median is chosen from among the leaf's elements and the new element.
-      2. Values less than the median are put in the new left node and values greater than the median are put in the new right node, with the median acting as a separation value.
-      3. That separation value is added to the node's parent, which may cause it to be split, and so on."
-  (multiple-value-bind (node position parents)
-      (apply #'btree-position-for-key tree key rest)
-    (assert node)
-    (assert position)
-    (assert (btree-node-leafp tree node))
-    (btree-node-insert tree node key :value value :key-position position :parents parents)))
-
-(defmethod btree-position-for-key (tree key &rest rest &key &allow-other-keys)
-  (let* ((node (btree-root tree))
-	 (position (apply #'btree-node-position-for-key tree node key rest))
-	 (parent-nodes nil))
-    (loop :until (btree-node-leafp tree node)
-	  :do (progn
-		(push node parent-nodes)
-		(setf node (btree-node-child-at-position tree node position)
-		      position (apply #'btree-node-position-for-key tree node key rest))))
-    (values node position parent-nodes)))
-	 
 (defun map-node-and-children (tree node fn)
   (flet ((keyval-fn (keyval)
 	   (funcall fn (car keyval) (cdr keyval)))
@@ -245,6 +216,6 @@ first element of seq1, then calls fn1 with the second element of seq2,
 	:do (funcall fn1 (elt seq1 i))
 	:unless (>= i (length seq2))
 	:do (funcall fn2 (elt seq2 i))))
-		 
+
 (defmethod btree-map ((tree memory-btree) map-fn &key start end value from-end &allow-other-keys)
   (map-node-and-children tree (btree-root tree) map-fn))

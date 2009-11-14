@@ -1,6 +1,6 @@
 (in-package :btree-tests)
 
-(declaim (optimize debug 3))
+(declaim (optimize (debug 3)))
 
 (in-suite btree-tests)
 
@@ -65,6 +65,14 @@
     (btree:btree-map b #'(lambda (k v) (push k out)))
     (is (equalp ordered-list (nreverse out)))))
 
+(deftest test-emulates-hashmap (hash &rest btree-initargs)
+  (let ((b (apply #'make-instance 'btree::memory-btree btree-initargs)))
+    (maphash #'(lambda (k v) (btree-insert b k v)) hash)
+    (maphash #'(lambda (k v)
+		 (is (equal v (btree-search b k))))
+	     hash)
+    b))
+
 (deftest sorts-like-sort (list &key (max-keys 3) (predicate #'<))
   (let ((b (make-instance 'btree::memory-btree :max-keys max-keys :predicate predicate))
 	out)
@@ -117,3 +125,65 @@
     (is (equal "Two" (btree-search b 2)))
     (is (equal "Three" (btree-search b 3)))
     (is (equal nil (btree-search b 2.5)))))
+
+(deftest easy-delete ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three") :max-keys 3)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal nil (btree-search b 2.5)))
+    (btree-delete b 1)
+    (btree-delete b 3)
+    (is (null (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (null (btree-search b 3)))))
+
+(deftest internal-delete ()
+  t
+  #+nil
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three"
+			   0 "Zero" 1/2 "One Half")
+			 :max-keys 2)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal "Zero" (btree-search b 0)))
+    (is (equal "One Half" (btree-search b 1/2)))
+
+    (btree-delete b 1/2) ;1/2 is the only value in an internal node
+
+    (is (null (btree-search b 1/2)))
+
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal "Zero" (btree-search b 0)))
+
+    b))
+
+(deftest internal-delete-root ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three" 0 "Zero" 4 "Four") :max-keys 2)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal "Zero" (btree-search b 0)))
+    (is (equal "Four" (btree-search b 4)))
+
+    (btree-delete b 2) ;2 is in the root, which is an internal node only value in an internal node
+
+    (is (null (btree-search b 2)))
+
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (equal "Zero" (btree-search b 0)))
+    (is (equal "Four" (btree-search b 4)))
+
+    b))
+
+(deftest hashmap-like1 ()
+  (test-emulates-hashmap (plist-hash-table '(1 "One" 2 "Two" 3 "Three")))
+  (test-emulates-hashmap
+   (plist-hash-table (loop :for i :from 0 :upto 1000
+			   :collect (random 1000000)
+			   :collect (format nil "~A ~A" (random 100) (random 5000))))))
+

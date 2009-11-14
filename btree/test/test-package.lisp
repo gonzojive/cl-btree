@@ -1,5 +1,5 @@
 (defpackage btree-tests
-  (:use :common-lisp :btree :stefil)
+  (:use :common-lisp :btree :stefil :alexandria)
   (:export #:run-tests))
 
 (in-package btree-tests)
