@@ -128,9 +128,9 @@ Example functions are @code{btree-node-split},
 @code{btree-node-child-at-position}.
 
 @item @emph{Node Offset}
- -- Designates a key-value index into a Node.  Could
-also be used to designate the place to insert a child node (the range
-is 0 - max-keys).  Relevant functions are
+ -- Designates a key-value index into a Node.  Could also be used to
+designate the place to insert a child node (the range is [0,
+max-keys]).  Relevant functions are
 @code{btree-node-position-for-key}.
 
 @item @emph{Cursor}
