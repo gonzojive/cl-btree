@@ -159,6 +159,68 @@
 
     b))
 
+(deftest minimal-leaf-delete ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three")
+			 :max-keys 2)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+
+    (btree-delete b 1) ;delete the only key in the left child
+
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    (is (null (btree-search b 1)))
+
+    b))
+
+(deftest minimal-delete-right-leaf ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three") :max-keys 2)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+
+    (btree-delete b 3) ;2 is in the root, which is an internal node only value in an internal node
+
+    (is (equal "One" (btree-search b 1)))
+    (is (null (btree-search b 3)))
+    (is (equal "Two" (btree-search b 2)))
+    b))
+
+
+(deftest minimal-delete-left-leaf ()
+  (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three") :max-keys 2)))
+    (is (equal "One" (btree-search b 1)))
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+
+    (btree-delete b 1) ;2 is in the root, which is an internal node only value in an internal node
+
+    (is (null (btree-search b 1)))
+
+    (is (equal "Two" (btree-search b 2)))
+    (is (equal "Three" (btree-search b 3)))
+    b))
+
+(deftest minimal-delete-everything ()
+  "Creates a hash table with 200 elements, adds them all to the btree, then
+removes them one by one and checks that the hash table and btree still look alike."
+  (let* ((plist (loop :for i :from -100 :upto 100
+		      :collect i
+		      :collect (format nil "=>~A" i)))
+	 (b (plist->btree plist :max-keys 2)))
+    (flet ((delete-and-check (hash)
+	     (let ((i (block xxx (maphash #'(lambda (k v) (return-from xxx k)) hash))))
+	       (btree-delete b i)
+	       (remhash i hash)
+	       (is (null (btree-search b i)))
+	       (maphash #'(lambda (k v)
+			    (is (equal v (btree-search b k))))
+			hash))))
+      (let ((hash  (plist-hash-table plist)))
+	(dotimes (i 200)
+	  (delete-and-check hash))))))
+
 (deftest internal-delete-root ()
   (let ((b (plist->btree '(1 "One" 2 "Two" 3 "Three" 0 "Zero" 4 "Four") :max-keys 2)))
     (is (equal "One" (btree-search b 1)))
@@ -177,6 +239,8 @@
     (is (equal "Four" (btree-search b 4)))
 
     b))
+
+
 
 (deftest hashmap-like1 ()
   (test-emulates-hashmap (plist-hash-table '(1 "One" 2 "Two" 3 "Three")))

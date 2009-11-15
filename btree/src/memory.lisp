@@ -92,7 +92,19 @@ Leafs have 0-length child array."))
   (assert (< position (length (node-children node))))
   (assert (btree-nodep tree   (aref (node-children node) position)))
   (aref (node-children node) position))
-    
+
+(defun vector-append (v1 v2)
+  (let ((original-v1-length (length v1)))
+    (incf (fill-pointer v1) (length v2))
+    (replace v1 v2 :start1 original-v1-length :start2 0)))
+
+(defmethod btree-join-nodes ((tree memory-btree) (node memory-btree-node) (other-node memory-btree-node))
+  (assert (not (xor (btree-node-leafp tree node) (btree-node-leafp tree other-node))))
+  ;; first insert all the key/values
+  ;; second inset all the children
+  (vector-append (node-children node) (node-children other-node))
+  (vector-append (node-keyvals node) (node-keyvals other-node)))
+          
 
 
 (defmethod btree-node-entry-at-offset ((tree memory-btree)
@@ -104,19 +116,19 @@ Leafs have 0-length child array."))
 
 
 (defmethod btree-replace-root ((tree memory-btree)
-			       &key key value left-child right-child)
+			       &key node key value left-child right-child)
   (debug-format "Replacing root: ~A ~A~%" left-child right-child)
-  
-  (let ((root (btree-make-node tree)))
-    (setf (btree-root tree) root)
-    (btree-node-insert-unfilled tree root 0 key value
-				   :right-child right-child  :left-child left-child)
-    (debug-format "New root: ~A~%" root)
-    root))
+  (if node
+      (setf (btree-root tree) node)
+      (let ((root (btree-make-node tree)))
+	(setf (btree-root tree) root)
+	(btree-node-insert-unfilled tree root 0 key value
+				    :right-child right-child  :left-child left-child)
+	root)))
 
 (defmethod btree-node-insert-unfilled  ((tree memory-btree)
-					   (node memory-btree-node)
-					   offset key value &key left-child right-child &allow-other-keys)
+					(node memory-btree-node)
+					offset key value &key left-child right-child &allow-other-keys)
   (assert (or (not (and left-child right-child))
 	      (and (btree-node-rootp tree node) (= 0 (length (node-keyvals node))))))
   (insert-into-array (node-keyvals node) (cons key value) offset)
@@ -125,6 +137,18 @@ Leafs have 0-length child array."))
   (when right-child
     (insert-into-array (node-children node) right-child (1+ offset)))
   tree)
+
+(defmethod btree-node-insert-child  ((tree memory-btree)
+				     (node memory-btree-node)
+				     offset child-node &key &allow-other-keys)
+  (insert-into-array (node-children node) child-node offset))
+
+(defmethod btree-node-delete-child  ((tree memory-btree)
+				     (node memory-btree-node)
+				     offset &key &allow-other-keys)
+  (with-accessors ((children node-children))
+      node
+    (setf children (delete-if (constantly t) children :start offset :count 1))))
 
 (defmethod btree-node-replace-key-value  ((tree memory-btree) (node memory-btree-node)
 					  offset key value &key &allow-other-keys)
@@ -138,13 +162,16 @@ Leafs have 0-length child array."))
 
 (defmethod btree-node-delete-from-node ((tree memory-btree)
 					(node memory-btree-node)
-					offset &key child-offset &allow-other-keys)
+					offset &key child-to-delete &allow-other-keys)
+  (declare (type (member :left :right nil) child-to-delete))
   (with-accessors ((keyvals node-keyvals)
 		   (children node-children))
       node
     (setf keyvals (delete-if (constantly t) keyvals :start offset :count 1))
-    (when child-offset
-      (setf children (delete-if (constantly t) keyvals :start child-offset :count 1)))))
+    (when child-to-delete
+      (assert (not (btree-node-leafp tree node)))
+      (let ((child-offset (if (eql :left child-to-delete) offset (1+ offset))))
+	(setf children (delete-if (constantly t) children :start child-offset :count 1))))))
 
 
 (defmethod btree-node-split ((tree memory-btree)
@@ -222,3 +249,4 @@ first element of seq1, then calls fn1 with the second element of seq2,
 
 (defmethod btree-map ((tree memory-btree) map-fn &key start end value from-end &allow-other-keys)
   (map-node-and-children tree (btree-root tree) map-fn))
+

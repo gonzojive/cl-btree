@@ -34,7 +34,7 @@ DEFAULT PROVIDED based on BTREE-MAX-KEYS."))
 (defgeneric btree-root (tree)
   (:documentation "Returns the root node of a btree"))
 
-(defgeneric btree-replace-root (tree &key key value left-child right-child)
+(defgeneric btree-replace-root (tree &key node key value left-child right-child)
   (:documentation "Called in the process of insertion if it is necessary to split the
 root."))
 
@@ -58,16 +58,20 @@ returned (so 1 past the last value that matches key)."))
 (defgeneric btree-delete-at-position (tree position &key &allow-other-keys)
   (:documentation "Deletes the KEY/VALUE pair in the given TREE at the given POSITION."))
 
-(defgeneric btree-delete-from-minimally-filled-leaf (tree position &key &allow-other-keys)
+(defgeneric btree-delete-from-minimally-filled-node (tree position &key &allow-other-keys)
   (:documentation "Deletes the key/value pair at the given position in the btree, when 
-the given positioin designates a leaf node with exactly the minimum number of required key/vals.
+the given positioin designates a node with exactly the minimum number of required key/vals.
 
-Recruits a key/value pair from adjacent nodes, or merges the node with an adjacent
+Recruits a key/value pair from sibling nodes, or merges the node with a sibling
 minimally-filled node if need be."))
 
 (defgeneric btree-delete-from-internal-node (tree position &key &allow-other-keys)
   (:documentation "Deletes the key/value at the given position, when the given
 position designates an internal node in the btree (i.e. one with children)."))
+
+(defgeneric btree-position-successor (tree position &key &allow-other-keys)
+  (:documentation "Returns a position that points to the next key/value pair in the
+tree."))
 
 ;;;; Node interface
 (defgeneric btree-nodep (tree node)
@@ -110,9 +114,15 @@ the given tree and node, as returned by BTREE-POSITION-FOR-KEY"))
 is only called on a node that is under the maximum size and this will avoid having to split
 and invoke subsequent operations on the parents."))
 
-(defgeneric btree-node-append-key-values-from-node (tree node other-node)
-  (:documentation "Moves all the key/value pairs from OTHER-NODE into NODE.  This happens
-when the OTHER-NODE is being discarded in a delete due to underflow. "))
+(defgeneric btree-node-insert-child  (tree node offset child-node &key &allow-other-keys)
+  (:documentation "Inserts the child node at offset into node."))
+
+(defgeneric btree-join-nodes (tree node other-node)
+  (:documentation "Moves all the key/value pairs and, in the case of an internal node, children,
+from OTHER-NODE into NODE.  This happens when the OTHER-NODE is being discarded in a
+delete due to underflow, and after the separation value from the parent node has
+been moved down into NODE.  Thus, all children need to be moved because NODE now has
+its own children only and not an extra child from the parent."))
 
 (defgeneric btree-node-replace-key-value  (tree node offset key value &key &allow-other-keys)
   (:documentation "Replaces a given key/value pair in a node with the supplied
@@ -133,7 +143,7 @@ values:
   (:documentation "Deletes the key/value pair at offset from the leaf node NODE
 when NODE has more than the minimum number of key/value pairs."))
 
-(defgeneric btree-node-delete-from-node (tree node offset &key child-offset &allow-other-keys)
+(defgeneric btree-node-delete-from-node (tree node offset &key child-to-delete &allow-other-keys)
   (:documentation "Deletes the key/value pair at offset from the leaf node NODE.
 Allows for underflow (i.e. minimum number of key/value pairs in leaf"))
 
@@ -258,9 +268,10 @@ key."
 
 (defmethod btree-delete-at-position (tree position &key &allow-other-keys)
   (let* ((node (position-node position))
-	 (leafp (btree-node-leafp tree node)))
+	 (leafp (btree-node-leafp tree node))
+	 (minimally-filledp (= (btree-node-keycount tree node) (btree-min-keys tree))))
     (cond
-      ((and leafp (or (> (btree-node-keycount tree node) (btree-min-keys tree))
+      ((and leafp (or (not minimally-filledp)
 		      (btree-node-rootp tree node)))
 	;; if it's a leaf and it has more than the minimum number of elements
        (btree-node-delete-leaf-sufficiently-filled tree node (position-node-offset position)))
@@ -268,7 +279,7 @@ key."
       (leafp
        ;; min-filled leaf
        (assert (= (btree-node-keycount tree node) (btree-min-keys tree)))
-       (btree-delete-from-minimally-filled-leaf tree position))
+       (btree-delete-from-minimally-filled-node tree position))
 
       (t
        ;; internal delete
@@ -276,42 +287,85 @@ key."
        ;; place, deleting it from the leaf from which it comes
        (btree-delete-from-internal-node tree position)))))
 
-(defun btree-mov-key-value (tree source-position destination-position source-action destination-action)
-  "Takes the key/value from SOURCE-POSITION and copies it into DESTINATION-POSITION.
+(defun btree-mov-child (tree source-position destination-position source-action destination-action)
+  "Copies the child node from SOURCE-POSITION to DESTINATION-POSITION, taking actions on the
+source and destination positions if specified.
 
-If SOURCE-ACTION is :delete, the key/value at SOURCE-POSITION is deleted before returning,
-otherwise no modification of the source node's key/values occurs.
+If SOURCE-ACTION is :delete, the child is deleted from the source node SOURCE-POSITION.
+Otherwise, no modification of the source node's key/values or children occurs.
 
-If DESTINATION-ACTION is replace, btree-node-replace-key-value is used to replace
-the key/value described by DESTINATION-POSITION.  If DESTINATION-ACTIO is :insert-unfilled,
-then btree-node-insert-unfilled is used to insert the key/value into the given postion."
-  (declare (type (member :delete-from-leaf :delete-keyval-and-right-child nil) source-action)
-	   (type (member :insert-unfilled :replace) destination-action))
+DESTINATION-ACTION should always be :insert
+"
+  (declare (type (member :delete nil) source-action)
+	   (type (member :insert) destination-action))
 
-  (multiple-value-bind (key value)
-      (btree-node-entry-at-offset tree
-				  (position-node source-position)
-				  (position-node-offset source-position))
+  (let ((source-node 	  (position-node source-position))
+	(source-offset	  (position-node-offset source-position)))
+
+  (let ((child (btree-node-child-at-offset tree source-node source-offset)))
     (case source-action
-      (:delete-keyval-and-right-child
-	 (error "No implementation for deleting right child."))
-      (:delete-from-leaf
-	 (btree-node-delete-from-sufficiently-filled-leaf tree
-							  (position-node source-position)
-							  (position-node-offset source-position)))
+      (:delete (btree-node-delete-child tree source-node source-offset))
       (t))
 
     (case destination-action
-      (:insert-unfilled
+      (:insert
+	 (btree-node-insert-child tree
+				  (position-node destination-position)
+				  (position-node-offset destination-position)
+				  child))))))
+
+(defun btree-mov (tree source-position destination-position source-action destination-action
+		  children)
+  "Copies the the key/value (and maybe children) from SOURCE-POSITION to
+DESTINATION-POSITION, taking actions on the source and destination positions if specified.
+
+If SOURCE-ACTION is :delete, the key/value and potentillay children at SOURCE-POSITION
+are deleted using btree-node-delete-from-node.  Otherwise, no modification of the source
+node's key/values or children occurs.
+
+If DESTINATION-ACTION is :replace-key-value, btree-node-replace-key-value is used to replace
+the key/value described by DESTINATION-POSITION.
+If DESTINATION-ACTION is :insert, then btree-node-insert-unfilled is used to insert
+the key/value into the given postion.  If CHILDREN is supplied, then either the left, right,
+or both children of SOURCE-POSITION (in case of :left, :right, and :both respectively) are
+inserted into the destination position.
+"
+  (declare (type (member :delete nil) source-action)
+	   (type (member :insert :replace-key-value) destination-action)
+	   (type (member :left :right :both nil) children))
+
+  (let ((source-node 	  (position-node source-position))
+	(source-offset	  (position-node-offset source-position)))
+
+  (multiple-value-bind (key value)
+      (btree-node-entry-at-offset tree source-node source-offset)
+    (let ((left-child (when (member children '(:left :both))
+			(btree-node-child-at-offset tree source-node source-offset)))
+	  (right-child (when (member children '(:right :both))
+			 (btree-node-child-at-offset tree source-node (1+ source-offset)))))
+      
+    (case source-action
+      (:delete
+	 (btree-node-delete-from-node tree
+				      source-node
+				      source-offset
+				      :child-to-delete children))
+      (t))
+
+    (case destination-action
+      (:insert
 	 (btree-node-insert-unfilled tree 
 				     (position-node destination-position)
 				     (position-node-offset destination-position)
-				     key value))
-      (:replace
+				     key value
+				     :left-child left-child
+				     :right-child right-child))
+      (:replace-key-value
+	 (assert (null children))
 	 (btree-node-replace-key-value tree 
 				       (position-node destination-position)
 				       (position-node-offset destination-position)
-				       key value)))))
+				       key value)))))))
 
 (defun btree-compute-underflow-action (tree deleted-position)
   "Computes how to deal with underflow encountered in a leaf node during deletion from
@@ -341,12 +395,18 @@ The returns values for this function are as follows:
     from the deletion.  It will always be the left sibling that remains.  Key/value
     pairs from the right node will need to be appended to the surviving node.  
     
-
 4.  If ACTION is :SHIFT-ONE, this value is SIBLING-KEYVAL-POSITION, the position from
     which a key/value pair needs to be shifted into PARENT-KEYVAL-POSITION after
     the parent's key/value pair is shifted into the destination.
 
     When ACTION is :MERGE, this value is not a position but the sibling node itself.
+
+5.  If ACTION is :SHIFT-ONE, this value is SIBLING-CHILD-POSITION, the position from
+    which a child nodes needs to be shifted into DESTINATION-CHILD-POSITION.
+
+6.  If ACTION is :SHIFT-ONE, this value is DESTINATION-CHILD-POSITION, the position to
+    which a child node needs to be shifted into from the sibling
+
 
 "
   ;; Everything here is named in reference to the underflowed node (e.g. parent is
@@ -391,93 +451,186 @@ The returns values for this function are as follows:
 	      ;; from which we move a value into the parent's key/value position
 	      (make-instance 'btree-position
 			     :node sibling-node
-			     :node-offset (if (not sibling-leftp) 0 (btree-node-keycount tree sibling-node))
+			     :node-offset (if (not sibling-leftp) 0 (1- (btree-node-keycount tree sibling-node)))
 			     :parent (make-instance 'btree-position
 						    :node parent
 						    :node-offset sibling-offset-in-parent
 						    :parent (position-parent parent-position)))
 	      ;; sibling-info of a merge action is the right node (the discarded node)
-	      right-node)))
-    (values action parent-keyval-position destination-keyval-position sibling-info)))
+	      right-node))
+	 (sibling-child-position
+	  (when (eql :shift-one action)
+	    ;; sibling-info of a shift action is the position in the sibling node
+	    ;; from which we move a value into the parent's key/value position
+	    (make-instance 'btree-position
+			   :node sibling-node
+			   :node-offset (if (not sibling-leftp) 0 (btree-node-keycount tree sibling-node))
+			   :parent (position-parent sibling-info))))
+	 (destination-child-position
+	  (when (eql :shift-one action)
+	      ;; sibling-info of a shift action is the position in the sibling node
+	      ;; from which we move a value into the parent's key/value position
+	    (make-instance 'btree-position
+			   :node underflowed-node
+			   :node-offset (if sibling-leftp 0 (1+ (btree-node-keycount tree underflowed-node)))
+			   :parent parent-position))))
+    (values action
+	    parent-keyval-position
+	    destination-keyval-position
+	    sibling-info
+	    sibling-child-position
+	    destination-child-position)))
 	 
-(defmethod  btree-delete-from-minimally-filled-node (tree position &key &allow-other-keys)
+(defmethod  btree-delete-from-minimally-filled-node (tree position &key child-to-delete &allow-other-keys)
+  (declare (type (member :left :right nil) child-to-delete))
   ;; Find the closest sibling to the node at which we are deleting the value
   ;; If that node has MORE than the minimum number of elements, we shift one of them
   ;; up to the parent node and shift the parent node's
   
-  
   (let ((this-node (position-node position))
 	(this-node-offset (position-node-offset position)))
-    ;; 1. Delete the key/value pair from the leaf
-    (btree-node-delete-from-node tree this-node this-node-offset)
+    (assert (if (btree-node-leafp tree this-node)
+		(null child-to-delete)
+		child-to-delete))
 
-    ;; Case 1: we do not need to merge sibling nodes
+    ;; 1. Delete the key/value pair from the node
+    (btree-node-delete-from-node tree this-node this-node-offset
+				 :child-to-delete child-to-delete)
+
+    ;; 2. Rebalance the tree after deletion
+
     (multiple-value-bind (action
 			  parent-keyval-position
 			  destination-keyval-position
-			  sibling-info)
+			  sibling-info
+			  sibling-child-position
+			  destination-child-position)
 	(btree-compute-underflow-action tree position)
       (declare (type (member :merge :shift-one) action))
       (case action
-	(:shift-one
+	;; Case 1: we do not need to merge sibling nodes
+    	(:shift-one
 	   (assert (eql this-node (position-node destination-keyval-position)))
 	   (assert (eql (position-node (position-parent position))
 			(position-node parent-keyval-position)))
-	   (let ((sibling-keyval-position sibling-info))
+	   (let* ((sibling-keyval-position sibling-info))
 	     ;; move parent key/value into this node at the given position
-	     (btree-mov-key-value tree
-				  parent-keyval-position
-				  destination-keyval-position
-				  nil :insert-unfilled)
-	     ;; move the sibling key/value into the key/value position we just replaced
-	     (btree-mov-key-value tree
-				  sibling-keyval-position
-				  parent-keyval-position
-				  :delete-from-leaf :replace)))
+	     (btree-mov tree
+			parent-keyval-position destination-keyval-position
+			nil                    :insert nil)
+	     ;; Copy the child from the sibling into the destination
+	     (btree-mov-child tree
+			      sibling-child-position destination-child-position
+			      :delete                :insert)
+	     ;; move the sibling key/value into the key/value of the parent
+	     (btree-mov tree
+			sibling-keyval-position parent-keyval-position
+			:delete                 :replace-key-value nil)))
+	;; Case 2: we need to merge this node with a sibling node
 	(:merge
 	   (let ((sibling-node sibling-info)
-		 (surviving-node (position-node destination-keyval-position)))
+		 (surviving-node (position-node destination-keyval-position))
+		 (parent-node (position-node (position-parent position))))
 	     (assert (eql (position-node (position-parent position))
 			  (position-node parent-keyval-position)))
+	     (debug-format "Decided to merge ~A~%           into  ~A~%   Parent: ~A~%"  sibling-node surviving-node parent-node)
+	     (debug-format "Key/value from ~A~%          ===> ~A~%"  parent-keyval-position destination-keyval-position)
 	     ;; move parent key/value into destination node at the given position
-	     (btree-mov-key-value tree
-				  parent-keyval-position
-				  destination-keyval-position
-				  :delete-keyval-and-right-child :insert-unfilled)
+	     (btree-mov tree
+			parent-keyval-position destination-keyval-position
+			nil                    :insert nil)
+
 	     ;; append the key/values from right node to the left node
-	     (btree-node-append-key-values-from-node tree
-						     surviving-node
-						     sibling-node)))))))
+	     (debug-format "After parent-mov: ~A ~%"  surviving-node)
+	     (debug-format "Going to merge ~A~%         into  ~A~%"  sibling-node surviving-node)
+	     (btree-join-nodes tree surviving-node sibling-node)
+	     (debug-format "After merge:      ~A ~%"  surviving-node)
+	     ;; Now we delete the parent key/value and right child
+	     (let ((parent-keycount (btree-node-keycount tree parent-node)))
+	       (cond
+		 ;; If we are deleting the last key-value from the root, then
+		 ;; replace the root with the surviving node
+		 ((and (btree-node-rootp tree parent-node)
+		       (= 1 parent-keycount))
+		  (btree-replace-root tree :node surviving-node))
+		 ;; Uh-oh, the parent has the min number of elements.  Recursively delete
+		 ((= (btree-min-keys tree) parent-keycount)
+		  (btree-delete-from-minimally-filled-node tree
+							   parent-keyval-position
+							   :child-to-delete :right))
+		 ;; If the parent node is sufficiently filled, just remove the
+		 ;; key/value and right child and be done with it
+		 (t
+		  (btree-node-delete-from-node tree parent-node
+					       (position-node-offset parent-keyval-position)
+					       :child-to-delete :right))))))))))
+
 						     
 						     
-(defmethod btree-delete-from-internal-node (tree position &key &allow-other-keys)
+(defmethod btree-delete-from-internal-node (tree position &key  &allow-other-keys)
   ;; move key/value pair from child (either the first key/value in the RIGHT child
   ;; or the last key-value in the LEFT child) into this node and then delete it from
   ;; the child.
 
   ;; Snatch a value from the left child and switch it out for our key-value
-  (let* ((this-node (position-node position))
-	 (this-node-offset  (position-node-offset position))
-	 (left-child (btree-node-child-at-offset tree this-node this-node-offset))
-	 (offset-in-child (1- (btree-node-keycount tree left-child)))
-	 (position-in-child (make-instance 'btree-position
-					   :node left-child
-					   :node-offset offset-in-child
-					   :parent position)))
+  (let* ((successor-position (btree-position-successor tree position :direction :right)))
     ;; replace
-    (multiple-value-bind (child-key child-value)
-	(btree-node-entry-at-offset tree left-child offset-in-child)
-      (btree-node-replace-key-value tree this-node this-node-offset
-				    child-key child-value))
-    ;; delete from the child
-    (btree-delete-at-position tree position-in-child)))
+    (btree-mov tree successor-position position :delete :replace-key-value nil)))
 
-(defmethod btree-node-append-key-values-from-node (tree node other-node)
-  (assert (btree-node-leafp tree node))
-  (assert (btree-node-leafp tree other-node))
-  (dotimes (i (btree-node-keycount tree other-node))
-    (multiple-value-bind (key value)
-	(btree-node-entry-at-offset tree other-node i)
-      ;; insert key/value pair at the end
-      (btree-node-insert-unfilled tree node (btree-node-keycount tree node)
-				  key value))))
+
+;;; Mapping over a btree
+(defun btree-extreme-position (tree position direction)
+  "Given a position in a btree that designates a node, returns the left-most or right-most
+position in that node and all of its subnodes."
+  (declare (type (member :left :right) direction ))
+  (if (not position)
+      nil
+      (let ((node (btree-node-child-at-offset tree (position-node position) (position-node-offset position))))
+	(if (btree-node-leafp tree node)
+	    (make-instance 'btree-position
+			   :node node
+			   :node-offset (if (eql :left direction) 0 (1- (btree-node-keycount tree node)))
+			   :parent position)
+	    (let* ((child-offset  (if (eql :left direction) 0 (btree-node-keycount tree node)))
+		   (child-position (make-instance
+				    'btree-position
+				    :node (btree-node-child-at-offset tree node child-offset)
+				    :node-offset child-offset
+				    :parent position)))
+	      (btree-extreme-position tree child-position direction))))))
+
+(defmethod btree-position-successor (tree position &key (direction :right) &allow-other-keys)
+  "Position is the position of a key/value in the tree.  If position is "
+  (let ((leafp (btree-node-leafp tree (position-node position))))
+    (cond 
+      ;; if we are not in a leaf, return the extremum of the left or right child
+	((not leafp)
+	 (assert (< (position-node-offset position)
+		    (btree-node-keycount tree (position-node position))))
+	 (btree-extreme-position tree
+				 (make-instance
+				  'btree-position
+				  :node (position-node position)
+				  :node-offset (if (eql :right direction)
+						   (1+ (position-node-offset position))
+						   (position-node-offset position))
+				   :parent (position-parent position))
+				 (if (eql :right direction) :left :right)))
+      ;; if we are in a leaf but there is no next element, recurse
+      ((and leafp
+	    ;;
+	    (if (eql :right direction)
+		(= (1+ (position-node-offset position))
+		   (btree-node-keycount tree (position-node position)))
+		(= 0 (position-node-offset position))))
+       (btree-position-successor tree (position-parent position) :direction direction))
+      ;; if we are in a leaf with an obvious successor
+      (t
+       (make-instance 'btree-position
+		      :node (position-node position)
+		      :node-offset (if (eql :right direction)
+				       (1+ (position-node-offset position))
+				       (1- (position-node-offset position)))
+		      :parent (position-parent position))))))
+
+
