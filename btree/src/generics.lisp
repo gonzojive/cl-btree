@@ -168,6 +168,7 @@ Allows for underflow (i.e. minimum number of key/value pairs in leaf"))
     (print-unreadable-object (o stream :type t)
       (format stream "~S[~A] ~A parent" node no (if parent "with" "without")))))
 
+(declaim (inline btree-make-position))
 (defun btree-make-position (btree &key node node-offset parent)
   (declare (ignore btree))
   (make-instance 'btree-position :node node :node-offset node-offset :parent parent))
@@ -212,10 +213,10 @@ key."
 
 (defmethod btree-position-for-key (tree key &key testp &allow-other-keys)
   (flet ((position-of-key-in-node (node parent-position)
-	   (make-instance 'btree-position
-			  :node node
-			  :node-offset (btree-node-offset-for-key tree node key)
-			  :parent parent-position)))
+	   (btree-make-position tree
+				:node node
+				:node-offset (btree-node-offset-for-key tree node key)
+				:parent parent-position)))
     (let* ((node (btree-root tree))
 	   (position (position-of-key-in-node node nil)))
       (loop :until (or (btree-node-leafp tree node)
@@ -433,51 +434,51 @@ The returns values for this function are as follows:
 		     :shift-one))
 	 ;; The Parent key/value will 
 	 (parent-keyval-position
-	  (make-instance 'btree-position
-			 :node parent
-			 :node-offset (if sibling-leftp sibling-offset-in-parent offset-in-parent)
-			 :parent (position-parent parent-position)))
+	  (btree-make-position tree
+			       :node parent
+			       :node-offset (if sibling-leftp sibling-offset-in-parent offset-in-parent)
+			       :parent (position-parent parent-position)))
 	 (destination-keyval-position
 	  (if (eql :shift-one action)
 	      ;; destination of a shift action is always the underflowed node
-	      (make-instance 'btree-position
-			     :node underflowed-node
-			     :node-offset (if sibling-leftp 0 (btree-node-keycount tree underflowed-node))
-			     :parent parent-position)
+	      (btree-make-position tree
+				   :node underflowed-node
+				   :node-offset (if sibling-leftp 0 (btree-node-keycount tree underflowed-node))
+				   :parent parent-position)
 	      ;; destination of a merge action is always the left node
-	      (make-instance 'btree-position
-			     :node left-node
-			     :node-offset (btree-node-keycount tree left-node)
-			     :parent parent-keyval-position)))
+	      (btree-make-position tree
+				   :node left-node
+				   :node-offset (btree-node-keycount tree left-node)
+				   :parent parent-keyval-position)))
 	 (sibling-info
 	  (if (eql :shift-one action)
 	      ;; sibling-info of a shift action is the position in the sibling node
 	      ;; from which we move a value into the parent's key/value position
-	      (make-instance 'btree-position
-			     :node sibling-node
-			     :node-offset (if (not sibling-leftp) 0 (1- (btree-node-keycount tree sibling-node)))
-			     :parent (make-instance 'btree-position
-						    :node parent
-						    :node-offset sibling-offset-in-parent
-						    :parent (position-parent parent-position)))
+	      (btree-make-position tree
+				   :node sibling-node
+				   :node-offset (if (not sibling-leftp) 0 (1- (btree-node-keycount tree sibling-node)))
+				   :parent (btree-make-position tree
+								:node parent
+								:node-offset sibling-offset-in-parent
+								:parent (position-parent parent-position)))
 	      ;; sibling-info of a merge action is the right node (the discarded node)
 	      right-node))
 	 (sibling-child-position
 	  (when (eql :shift-one action)
 	    ;; sibling-info of a shift action is the position in the sibling node
 	    ;; from which we move a value into the parent's key/value position
-	    (make-instance 'btree-position
-			   :node sibling-node
-			   :node-offset (if (not sibling-leftp) 0 (btree-node-keycount tree sibling-node))
-			   :parent (position-parent sibling-info))))
+	    (btree-make-position tree
+				 :node sibling-node
+				 :node-offset (if (not sibling-leftp) 0 (btree-node-keycount tree sibling-node))
+				 :parent (position-parent sibling-info))))
 	 (destination-child-position
 	  (when (eql :shift-one action)
 	      ;; sibling-info of a shift action is the position in the sibling node
 	      ;; from which we move a value into the parent's key/value position
-	    (make-instance 'btree-position
-			   :node underflowed-node
-			   :node-offset (if sibling-leftp 0 (1+ (btree-node-keycount tree underflowed-node)))
-			   :parent parent-position))))
+	    (btree-make-position tree
+				 :node underflowed-node
+				 :node-offset (if sibling-leftp 0 (1+ (btree-node-keycount tree underflowed-node)))
+				 :parent parent-position))))
     (values action
 	    parent-keyval-position
 	    destination-keyval-position
@@ -589,15 +590,15 @@ The returns values for this function are as follows:
     (unless (= 0 root-keycount)
       (let* ((direction (if from-end :left :right))
 	     (pos (if (btree-node-leafp tree root)
-		      (make-instance 'btree-position
-					      :node root
-					      :node-offset (if from-end (- root-keycount 1) 0)
-					      :parent nil)
+		      (btree-make-position tree
+					   :node root
+					   :node-offset (if from-end (- root-keycount 1) 0)
+					   :parent nil)
 		      (btree-extreme-position tree
-					      (make-instance 'btree-position
-							     :node root
-							     :node-offset (if from-end root-keycount 0)
-							     :parent nil)
+					      (btree-make-position tree
+								   :node root
+								   :node-offset (if from-end root-keycount 0)
+								   :parent nil)
 					      (if from-end :right :left)))))
 	(loop :until (null pos)
 	      :do (multiple-value-bind (key val)
@@ -615,16 +616,15 @@ position in that node and all of its subnodes."
       nil
       (let ((node (btree-node-child-at-offset tree (position-node position) (position-node-offset position))))
 	(if (btree-node-leafp tree node)
-	    (make-instance 'btree-position
-			   :node node
-			   :node-offset (if (eql :left direction) 0 (1- (btree-node-keycount tree node)))
-			   :parent position)
+	    (btree-make-position tree
+				 :node node
+				 :node-offset (if (eql :left direction) 0 (1- (btree-node-keycount tree node)))
+				 :parent position)
 	    (let* ((child-offset  (if (eql :left direction) 0 (btree-node-keycount tree node)))
-		   (child-position (make-instance
-				    'btree-position
-				    :node node
-				    :node-offset child-offset
-				    :parent position)))
+		   (child-position (btree-make-position tree
+							:node node
+							:node-offset child-offset
+							:parent position)))
 	      (btree-extreme-position tree child-position direction))))))
 
 (defmethod btree-position-successor (tree position &key (direction :right) &allow-other-keys)
@@ -640,13 +640,12 @@ fetched."
 	 (assert (< (position-node-offset position)
 		    (btree-node-keycount tree (position-node position))))
 	 (btree-extreme-position tree
-				 (make-instance
-				  'btree-position
-				  :node (position-node position)
-				  :node-offset (if (eql :right direction)
-						   (1+ (position-node-offset position))
-						   (position-node-offset position))
-				  :parent (position-parent position))
+				 (btree-make-position tree
+						      :node (position-node position)
+						      :node-offset (if (eql :right direction)
+								       (1+ (position-node-offset position))
+								       (position-node-offset position))
+						      :parent (position-parent position))
 				 (if (eql :right direction) :left :right)))
       ;; if we are in a leaf but there is no next element and we are going RIGHT,
       ;; then return the parent node
@@ -680,12 +679,12 @@ fetched."
 	 (first-valid-parent-position-to-left position)))
       ;; if we are in a leaf with an obvious successor
       (t
-       (make-instance 'btree-position
-		      :node (position-node position)
-		      :node-offset (if (eql :right direction)
-				       (1+ (position-node-offset position))
-				       (1- (position-node-offset position)))
-		      :parent (position-parent position))))))
+       (btree-make-position tree
+			    :node (position-node position)
+			    :node-offset (if (eql :right direction)
+					     (1+ (position-node-offset position))
+					     (1- (position-node-offset position)))
+			    :parent (position-parent position))))))
 
 
 

@@ -1,6 +1,6 @@
 (in-package :btree)
 
-(declaim (optimize (debug 3)))
+(declaim (optimize (speed 3)))
 
 (defclass memory-btree ()
   ((root-node
