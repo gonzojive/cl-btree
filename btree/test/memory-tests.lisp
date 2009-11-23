@@ -57,13 +57,15 @@
       (btree:btree-insert b i (format nil "Value ~A" i)))
     b))
 
-(deftest ordered-in-ordered-out (ordered-list &key (max-keys 3))
+(deftest ordered-in-ordered-out (ordered-list &key (max-keys 3) from-end)
   (let ((b (make-instance 'btree::memory-btree :max-keys max-keys))
 	out)
     (dolist (i ordered-list)
       (btree:btree-insert b i i))
-    (btree:btree-map b #'(lambda (k v) (push k out)))
-    (is (equalp ordered-list (nreverse out)))))
+    (btree:btree-map b #'(lambda (k v) (declare (ignore v)) (push k out)) :from-end from-end)
+    (if from-end
+	(is (equalp ordered-list out))
+	(is (equalp ordered-list (nreverse out))))))
 
 (deftest test-emulates-hashmap (hash &rest btree-initargs)
   (let ((b (apply #'make-instance 'btree::memory-btree btree-initargs)))
@@ -89,8 +91,16 @@
   (ordered-in-ordered-out (ordered-listn 3))
   (ordered-in-ordered-out (ordered-listn 12))
   (ordered-in-ordered-out (ordered-listn 30))
-  (ordered-in-ordered-out (ordered-listn 3000) :max-keys 15)
+  (ordered-in-ordered-out (ordered-listn 300) :max-keys 15)
   (ordered-in-ordered-out (ordered-listn 3000) :max-keys 15))
+
+(deftest many-ordered-when-mapped-from-end ()
+  (ordered-in-ordered-out (ordered-listn 3) :from-end t)
+  (ordered-in-ordered-out (ordered-listn 12)  :from-end t)
+  (ordered-in-ordered-out (ordered-listn 30)  :from-end t)
+  (ordered-in-ordered-out (ordered-listn 100) :max-keys 15  :from-end t)
+  (ordered-in-ordered-out (ordered-listn 1000) :max-keys 5  :from-end t))
+
 
 (defun plist->btree (plist &rest btree-args)
   (let ((b (apply #'make-instance 'btree::memory-btree btree-args)))

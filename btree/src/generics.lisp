@@ -168,6 +168,10 @@ Allows for underflow (i.e. minimum number of key/value pairs in leaf"))
     (print-unreadable-object (o stream :type t)
       (format stream "~S[~A] ~A parent" node no (if parent "with" "without")))))
 
+(defun btree-make-position (btree &key node node-offset parent)
+  (declare (ignore btree))
+  (make-instance 'btree-position :node node :node-offset node-offset :parent parent))
+
 (defmethod btree-search (tree key &rest rest &key &allow-other-keys)
   "Search is performed in the typical manner, analogous to that in a
 binary search tree. Starting at the root, the tree is traversed top to
@@ -254,7 +258,7 @@ key."
 	;; parent node, with left and right nodes according to the split.
 	(multiple-value-bind (left-split-child right-split-child median-key median-value)
 	    (btree-node-split tree node
-			      :key key :value value :key-position (position-node-offset position)
+			      :key key :value value :key-offset (position-node-offset position)
 			      :left-child left-child :right-child right-child)
 	  ;; (sanity-check-btree tree)
 	  (if (not (btree-node-rootp tree node))
@@ -274,7 +278,7 @@ key."
       ((and leafp (or (not minimally-filledp)
 		      (btree-node-rootp tree node)))
 	;; if it's a leaf and it has more than the minimum number of elements
-       (btree-node-delete-leaf-sufficiently-filled tree node (position-node-offset position)))
+       (btree-node-delete-from-sufficiently-filled-leaf tree node (position-node-offset position)))
       
       (leafp
        ;; min-filled leaf
@@ -577,8 +581,32 @@ The returns values for this function are as follows:
     ;; replace
     (btree-mov tree successor-position position :delete :replace-key-value nil)))
 
-
 ;;; Mapping over a btree
+(defmethod btree-map (tree map-fn &key start end value from-end &allow-other-keys)
+    ;; FIXME TODO handle all the arguments
+  (let* ((root (btree-root tree))
+	 (root-keycount (btree-node-keycount tree root)))
+    (unless (= 0 root-keycount)
+      (let* ((direction (if from-end :left :right))
+	     (pos (if (btree-node-leafp tree root)
+		      (make-instance 'btree-position
+					      :node root
+					      :node-offset (if from-end (- root-keycount 1) 0)
+					      :parent nil)
+		      (btree-extreme-position tree
+					      (make-instance 'btree-position
+							     :node root
+							     :node-offset (if from-end root-keycount 0)
+							     :parent nil)
+					      (if from-end :right :left)))))
+	(loop :until (null pos)
+	      :do (multiple-value-bind (key val)
+		      (btree-node-entry-at-offset tree (position-node pos) (position-node-offset pos))
+		    (funcall map-fn key val))
+	      :do (setf pos (btree-position-successor tree pos :direction direction)))))))
+	
+
+    
 (defun btree-extreme-position (tree position direction)
   "Given a position in a btree that designates a node, returns the left-most or right-most
 position in that node and all of its subnodes."
@@ -594,13 +622,17 @@ position in that node and all of its subnodes."
 	    (let* ((child-offset  (if (eql :left direction) 0 (btree-node-keycount tree node)))
 		   (child-position (make-instance
 				    'btree-position
-				    :node (btree-node-child-at-offset tree node child-offset)
+				    :node node
 				    :node-offset child-offset
 				    :parent position)))
 	      (btree-extreme-position tree child-position direction))))))
 
 (defmethod btree-position-successor (tree position &key (direction :right) &allow-other-keys)
-  "Position is the position of a key/value in the tree.  If position is "
+  "Position is the position of a key/value in a btree.  If position is
+at an extreme end of the tree it is legal to return NIL to indicate
+that there is no successor.  Otherwise, the returned value must be a
+valid position in the tree from which a KEY/VALUE pair may be
+fetched."
   (let ((leafp (btree-node-leafp tree (position-node position))))
     (cond 
       ;; if we are not in a leaf, return the extremum of the left or right child
@@ -614,16 +646,38 @@ position in that node and all of its subnodes."
 				  :node-offset (if (eql :right direction)
 						   (1+ (position-node-offset position))
 						   (position-node-offset position))
-				   :parent (position-parent position))
+				  :parent (position-parent position))
 				 (if (eql :right direction) :left :right)))
-      ;; if we are in a leaf but there is no next element, recurse
+      ;; if we are in a leaf but there is no next element and we are going RIGHT,
+      ;; then return the parent node
       ((and leafp
-	    ;;
-	    (if (eql :right direction)
-		(= (1+ (position-node-offset position))
-		   (btree-node-keycount tree (position-node position)))
-		(= 0 (position-node-offset position))))
-       (btree-position-successor tree (position-parent position) :direction direction))
+	    (eql direction :right)
+	    (= (1+ (position-node-offset position))
+	       (btree-node-keycount tree (position-node position))))
+       (labels ((first-valid-parent-position (position)
+		  (when-let (parent-pos (position-parent position))
+		    (let* ((offset-in-parent (position-node-offset parent-pos))
+			   (offset-in-parent-valid? (< offset-in-parent
+						       (btree-node-keycount tree (position-node parent-pos)))))
+		      (if offset-in-parent-valid?
+			  parent-pos
+			  (first-valid-parent-position parent-pos))))))
+	 (first-valid-parent-position position)))
+      ((and leafp
+	    (eql direction :left)
+	    (= 0 (position-node-offset position)))
+
+       (labels ((first-valid-parent-position-to-left (position)
+		  (when-let (parent-pos (position-parent position))
+		    (let* ((offset-in-parent (position-node-offset parent-pos))
+			   (offset-in-parent-valid? (< 0 offset-in-parent)))
+		      (if offset-in-parent-valid?
+			  (btree-make-position tree
+					       :node (position-node parent-pos)
+					       :node-offset (- offset-in-parent 1)
+					       :parent (position-parent parent-pos))
+			  (first-valid-parent-position-to-left parent-pos))))))
+	 (first-valid-parent-position-to-left position)))
       ;; if we are in a leaf with an obvious successor
       (t
        (make-instance 'btree-position
@@ -634,3 +688,5 @@ position in that node and all of its subnodes."
 		      :parent (position-parent position))))))
 
 
+
+  
