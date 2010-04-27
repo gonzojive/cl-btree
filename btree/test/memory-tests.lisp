@@ -1,6 +1,7 @@
 (in-package :btree-tests)
 
 (declaim (optimize (debug 3)))
+;(declaim (optimize (speed 3) (safety 0))
 
 (in-suite btree-tests)
 

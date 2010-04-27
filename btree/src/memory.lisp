@@ -306,7 +306,7 @@ first element of seq1, then calls fn1 with the second element of seq2,
   ;; implement it
   (loop :for i :from 0 :upto (1- (length seq1))
 	:do (funcall fn1 (elt seq1 i))
-	:unless (>= i (length seq2))
-	:do (funcall fn2 (elt seq2 i))))
+	:unless (>= i (length seq2))	
+        :do (funcall fn2 (elt seq2 i))))
 
 

@@ -22,8 +22,8 @@
 		"src"
 		:components
 		((:file "package")
-		 (:file "generics" :depends-on ("package"))
-		 (:file "memory" :depends-on ("generics"))
+		 #+nil(:file "generics" :depends-on ("package"))
+		 #+nil(:file "memory" :depends-on ("generics"))
 		 )))
 
   :depends-on (:alexandria))
@@ -33,4 +33,4 @@
                         :components ((:file "test-package")
 				     (:file "memory-tests" :depends-on ("test-package"))
 				     )))
-  :depends-on ("btree" "stefil"))
+  :depends-on ("btree" "hu.dwim.stefil"))
